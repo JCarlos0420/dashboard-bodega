@@ -1,0 +1,11 @@
+# Configuracion visual del dashboard (Paso 8)
+[theme]
+base = "light"
+primaryColor = "#2a78d6"          # azul de los graficos
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f4f6f9"   # fondo del menu lateral y tarjetas
+textColor = "#1f2328"
+font = "sans serif"
+
+[browser]
+gatherUsageStats = false          # no envia estadisticas ni pide correo
