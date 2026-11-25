@@ -129,10 +129,13 @@ if __name__ == "__main__":
     print("\n=== RESUMEN DEL SEMAFORO ===")
     print(resumen_semaforo(df).to_string(index=False))
 
-    # Control: debe coincidir con tu hoja SEMAFORIZACIÓN (As-Is 0/0/6, To-Be 4/1/1)
+    # Control: debe coincidir con el "Resumen del semaforo" de la hoja del Excel
     r = resumen_semaforo(df)
-    esperado_as_is, esperado_to_be = [0, 0, 6], [4, 1, 1]
-    if r["as_is"].tolist() == esperado_as_is and r["to_be"].tolist() == esperado_to_be:
+    excel = datos["semaforo_resumen_excel"]
+    calculado = {c: (a, b) for c, a, b in zip(r["color"], r["as_is"], r["to_be"])}
+    if calculado == excel:
         print("\nOK: el semaforo coincide con la hoja SEMAFORIZACIÓN del Excel.")
     else:
-        print("\nATENCION: el resultado no coincide con la hoja del Excel. Revisa metas y limites.")
+        print("\nATENCION: el resultado no coincide con la hoja del Excel.")
+        print(f"  Python: {calculado}")
+        print(f"  Excel : {excel}")

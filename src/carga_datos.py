@@ -32,22 +32,18 @@ HOJA_RESULTADOS = "Resultados-Indicadores"
 HOJA_SEMAFORO = "SEMAFORIZACIÓN"
 HOJA_FLUJO = "Flujo Caja"
 
-# Resultados-Indicadores: filas 7 (ERI) a 12 (IND.5), columnas C..M
-FILAS_RESULTADOS = range(7, 13)
-FILA_TOTAL_RESULTADOS = 13
-
-# SEMAFORIZACIÓN: tabla de parametros, filas 7 a 12, columnas B..F
-FILAS_SEMAFORO = range(7, 13)
-
-# Flujo Caja
-FILAS_SUPUESTOS = range(7, 14)     # B7:C13
-FILAS_INVERSION = range(19, 25)    # B19:C24  (B25 = total)
-FILA_INVERSION_TOTAL = 25
-FILAS_COSTOS = range(31, 37)       # B31:C36  (B37 = total)
-FILA_COSTO_TOTAL = 37
-FILA_MESES = 43                    # B43:O43  (meses 0..12)
-FILAS_FLUJO = range(44, 51)        # B44:O50
-FILAS_INDICADORES = range(56, 63)  # B56:C62
+# IMPORTANTE: las tablas se BUSCAN por su texto (columna B o C), no por un
+# numero de fila fijo. Asi el codigo sigue funcionando aunque agregues o
+# quites filas en el Excel. Solo no cambies estos textos:
+TXT_ERI = "ERI"                                   # Resultados-Indicadores, col. C
+TXT_SUPUESTOS_INI = "Tasa de descuento anual (COK)"
+TXT_SUPUESTOS_FIN = "Días de atención al año"
+TXT_INVERSION_INI = "2. Inversión inicial"
+TXT_INVERSION_TOTAL = "INVERSIÓN TOTAL"
+TXT_COSTOS_INI = "3. Costos operativos"
+TXT_COSTO_TOTAL = "COSTO OPERATIVO TOTAL ANUAL"
+TXT_MESES = "Concepto / Mes"
+TXT_RESUMEN_SEMAFORO = "Resumen del semáforo"
 
 # Datos que no estan en la hoja de resultados: a que objetivo y herramienta
 # pertenece cada indicador (tomado de O.E 1 a O.E 5 y PLANTEAMIENTO).
@@ -86,6 +82,18 @@ def valor(hoja, celda: str):
     return v
 
 
+def buscar_fila(hoja, texto: str, columna: str = "B", desde: int = 1) -> int:
+    """Devuelve la primera fila (desde 'desde') cuya celda empieza con 'texto'."""
+    for r in range(desde, hoja.max_row + 1):
+        v = hoja[f"{columna}{r}"].value
+        if isinstance(v, str) and v.strip().startswith(texto):
+            return r
+    raise ValueError(
+        f"No encontre el texto '{texto}' en la columna {columna} de la hoja "
+        f"'{hoja.title}'. Revisa que ese titulo siga escrito igual en el Excel."
+    )
+
+
 def codigo_de(nombre_indicador: str) -> str:
     """'IND.1 – % de quiebres...' -> 'IND.1'   |   'ERI – ...' -> 'ERI'"""
     return nombre_indicador.split("–")[0].split(" ")[0].strip()
@@ -96,8 +104,9 @@ def codigo_de(nombre_indicador: str) -> str:
 # ---------------------------------------------------------------------------
 def cargar_resultados(wb) -> pd.DataFrame:
     h = wb[HOJA_RESULTADOS]
+    fila_eri = buscar_fila(h, TXT_ERI, columna="C")
     filas = []
-    for r in FILAS_RESULTADOS:
+    for r in range(fila_eri, fila_eri + 6):          # ERI + IND.1 ... IND.5
         nombre = valor(h, f"C{r}")
         cod = codigo_de(nombre)
         objetivo, herramienta = OBJETIVOS.get(cod, ("", ""))
@@ -132,7 +141,7 @@ def cargar_resultados(wb) -> pd.DataFrame:
 
 def cargar_total_resultados(wb) -> dict:
     h = wb[HOJA_RESULTADOS]
-    r = FILA_TOTAL_RESULTADOS
+    r = buscar_fila(h, TXT_ERI, columna="C") + 6     # fila "Total de la propuesta"
     antes = float(valor(h, f"E{r}"))
     despues = float(valor(h, f"G{r}"))
     return {
@@ -148,8 +157,9 @@ def cargar_total_resultados(wb) -> dict:
 # ---------------------------------------------------------------------------
 def cargar_parametros_semaforo(wb) -> pd.DataFrame:
     h = wb[HOJA_SEMAFORO]
+    fila_eri = buscar_fila(h, "ERI")
     filas = []
-    for r in FILAS_SEMAFORO:
+    for r in range(fila_eri, fila_eri + 6):
         filas.append({
             "nombre_corto": valor(h, f"B{r}"),
             "sentido": valor(h, f"C{r}"),
@@ -164,52 +174,80 @@ def cargar_parametros_semaforo(wb) -> pd.DataFrame:
 # 5. FLUJO DE CAJA
 # ---------------------------------------------------------------------------
 def _tabla_concepto_monto(h, filas, col_monto="C", col_fuente="E"):
+    """Lee concepto / monto / fuente. Ignora las filas vacias."""
     datos = []
     for r in filas:
+        concepto = h[f"B{r}"].value
+        if concepto is None or str(concepto).strip() == "":
+            continue                       # fila vacia: se salta
         datos.append({
-            "concepto": valor(h, f"B{r}"),
+            "concepto": str(concepto).strip(),
             "monto": h[f"{col_monto}{r}"].value,
             "fuente": h[f"{col_fuente}{r}"].value or "",
         })
     return pd.DataFrame(datos)
 
 
+def _inicio_tabla(h, texto_seccion: str) -> int:
+    """Primera fila de datos: la que sigue al encabezado 'Concepto' de la seccion."""
+    sec = buscar_fila(h, texto_seccion)
+    return buscar_fila(h, "Concepto", desde=sec) + 1
+
+
 def cargar_flujo_caja(wb) -> dict:
     h = wb[HOJA_FLUJO]
 
-    supuestos = _tabla_concepto_monto(h, FILAS_SUPUESTOS)
-    inversion = _tabla_concepto_monto(h, FILAS_INVERSION)
-    costos = _tabla_concepto_monto(h, FILAS_COSTOS)
+    # Supuestos: desde "Tasa de descuento anual" hasta "Dias de atencion"
+    r1 = buscar_fila(h, TXT_SUPUESTOS_INI)
+    r2 = buscar_fila(h, TXT_SUPUESTOS_FIN, desde=r1)   # tabla de la seccion 1
+    supuestos = _tabla_concepto_monto(h, range(r1, r2 + 1))
 
-    # Flujo mensual: columnas C (mes 0) a O (mes 12)
-    columnas = [openpyxl.utils.get_column_letter(c) for c in range(3, 16)]
-    meses = [int(valor(h, f"{c}{FILA_MESES}")) for c in columnas]
-    nombres = {
-        44: "ahorro",
-        45: "costos_operativos",
-        46: "inversion",
-        47: "flujo_neto",
-        48: "flujo_acumulado",
-        49: "flujo_descontado",
-        50: "descontado_acumulado",
-    }
+    # Inversion: filas entre el encabezado de la seccion 2 y "INVERSION TOTAL"
+    ini = _inicio_tabla(h, TXT_INVERSION_INI)
+    fila_inv_total = buscar_fila(h, TXT_INVERSION_TOTAL, desde=ini)
+    inversion = _tabla_concepto_monto(h, range(ini, fila_inv_total))
+
+    # Costos operativos: entre la seccion 3 y "COSTO OPERATIVO TOTAL ANUAL"
+    ini = _inicio_tabla(h, TXT_COSTOS_INI)
+    fila_costo_total = buscar_fila(h, TXT_COSTO_TOTAL, desde=ini)
+    costos = _tabla_concepto_monto(h, range(ini, fila_costo_total))
+
+    # Los montos de inversion y costos deben ser numeros (texto o vacio -> 0)
+    for tabla in (inversion, costos):
+        tabla["monto"] = pd.to_numeric(tabla["monto"], errors="coerce").fillna(0.0)
+
+    # Flujo mensual: fila "Concepto / Mes" y las 7 filas siguientes
+    fila_meses = buscar_fila(h, TXT_MESES)
+    columnas = [openpyxl.utils.get_column_letter(c) for c in range(3, 16)]  # C..O
+    meses = [int(valor(h, f"{c}{fila_meses}")) for c in columnas]
+    nombres = [
+        "ahorro",
+        "costos_operativos",
+        "inversion",
+        "flujo_neto",
+        "flujo_acumulado",
+        "flujo_descontado",
+        "descontado_acumulado",
+    ]
     flujo = pd.DataFrame({"mes": meses})
-    for r in FILAS_FLUJO:
-        flujo[nombres[r]] = [float(valor(h, f"{c}{r}")) for c in columnas]
+    for i, nombre in enumerate(nombres, start=1):
+        flujo[nombre] = [float(valor(h, f"{c}{fila_meses + i}")) for c in columnas]
 
-    # Indicadores economicos (VAN, TIR, B/C, recuperacion...)
-    ind = {valor(h, f"B{r}"): valor(h, f"C{r}") for r in FILAS_INDICADORES}
+    # Indicadores economicos: se buscan por su nombre en la columna B
+    def ind(texto):
+        return valor(h, f"C{buscar_fila(h, texto)}")
+
     indicadores = {
-        "van": float(ind["VAN (valor actual neto)"]),
-        "tir_mensual": float(ind["TIR mensual"]),
-        "bc": float(ind["Relación beneficio / costo (B/C)"]),
-        "recuperacion_mes": int(ind["Periodo de recuperación (mes)"]),
-        "beneficio_neto_anio1": float(ind["Beneficio neto del año 1 (sin descontar)"]),
-        "decision": ind["DECISIÓN"],
-        "cok_anual": float(valor(h, "C7")),
-        "cok_mensual": float(valor(h, "C8")),
-        "inversion_total": float(valor(h, f"C{FILA_INVERSION_TOTAL}")),
-        "costo_operativo_anual": float(valor(h, f"C{FILA_COSTO_TOTAL}")),
+        "van": float(ind("VAN (valor actual neto)")),
+        "tir_mensual": float(ind("TIR mensual")),
+        "bc": float(ind("Relación beneficio / costo (B/C)")),
+        "recuperacion_mes": int(ind("Periodo de recuperación (mes)")),
+        "beneficio_neto_anio1": float(ind("Beneficio neto del año 1")),
+        "decision": ind("DECISIÓN"),
+        "cok_anual": float(ind(TXT_SUPUESTOS_INI)),
+        "cok_mensual": float(ind("Tasa de descuento mensual")),
+        "inversion_total": float(valor(h, f"C{fila_inv_total}")),
+        "costo_operativo_anual": float(valor(h, f"C{fila_costo_total}")),
     }
 
     return {
@@ -219,6 +257,18 @@ def cargar_flujo_caja(wb) -> dict:
         "flujo": flujo,
         "indicadores": indicadores,
     }
+
+
+def cargar_resumen_semaforo_excel(wb) -> dict:
+    """Lee el 'Resumen del semaforo' de la hoja (Verde/Amarillo/Rojo)."""
+    h = wb[HOJA_SEMAFORO]
+    r = buscar_fila(h, TXT_RESUMEN_SEMAFORO)
+    resumen = {}
+    for fila in range(r + 1, r + 6):
+        color = h[f"B{fila}"].value
+        if color in ("Verde", "Amarillo", "Rojo"):
+            resumen[color] = (int(h[f"D{fila}"].value or 0), int(h[f"E{fila}"].value or 0))
+    return resumen
 
 
 # ---------------------------------------------------------------------------
@@ -239,6 +289,7 @@ def cargar_todo(ruta: Path = RUTA_EXCEL) -> dict:
         "resultados": resultados,
         "total": cargar_total_resultados(wb),
         "semaforo_parametros": semaforo,
+        "semaforo_resumen_excel": cargar_resumen_semaforo_excel(wb),
         "flujo_caja": cargar_flujo_caja(wb),
     }
 
